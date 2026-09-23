@@ -1,0 +1,84 @@
+name: ORBIT GOLF CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: orbit-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+        working-directory: dcrgaming-orbitgolf
+    steps:
+      - name: Check out game
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: dcrgaming-orbitgolf
+          persist-credentials: false
+
+      # go.mod intentionally uses ../dcrgaming-sdk for local development.
+      - name: Check out pinned SDK alongside game
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: karamble/dcrgaming-sdk
+          ref: bd72465cbee7cd2491531cb2b9ffee3652b46d6c
+          path: dcrgaming-sdk
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: dcrgaming-orbitgolf/go.mod
+          cache-dependency-path: |
+            dcrgaming-orbitgolf/go.sum
+            dcrgaming-sdk/go.sum
+
+      - name: Reject tracked artifacts, binaries and caches
+        run: |
+          tracked_ignored=$(git ls-files --cached --ignored --exclude-standard)
+          if [ -n "$tracked_ignored" ]; then
+            echo 'Ignored files must not be committed:' >&2
+            printf '%s\n' "$tracked_ignored" >&2
+            exit 1
+          fi
+
+      - name: Check Go formatting
+        run: |
+          unformatted=$(gofmt -s -l cmd internal pkg)
+          if [ -n "$unformatted" ]; then
+            printf 'Run gofmt -s -w on:\n%s\n' "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: Check module hygiene and escrow dependency pins
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+          go mod verify
+          test "$(go list -m -f '{{.Version}}' github.com/decred/dcrd/txscript/v4)" = v4.1.1
+          test "$(go list -m -f '{{.Version}}' github.com/decred/dcrd/wire)" = v1.7.0
+
+      - name: Install checksum-pinned Godot 4.6.3
+        env:
+          GODOT_SHA512: a035258da32b77f966a5376f9fa29c30a6adde826a85ba918e1605bd1fc9823eba7d85f1dd5e748956bd2ba72827c0025ffa11bb82aec91128c407a2e723c99c
+        run: |
+          mkdir -p .tools
+          curl --fail --location --retry 3 --output .tools/godot.zip \
+            https://github.com/godotengine/godot-builds/releases/download/4.6.3-stable/Godot_v4.6.3-stable_linux.x86_64.zip
+          printf '%s  .tools/godot.zip\n' "$GODOT_SHA512" | sha512sum --check --strict
+          unzip -q .tools/godot.zip -d .tools
+          chmod +x .tools/Godot_v4.6.3-stable_linux.x86_64
+
+      - name: Build, race tests, vet and headless Godot smoke tests
+        run: make check

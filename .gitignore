@@ -1,0 +1,16 @@
+# Downloaded tools and engine caches.
+.tools/
+.godot/
+client/.godot/
+
+# Compiled backends, exported games and test binaries.
+bin/
+dist/
+/orbit-backend
+*.exe
+*.test
+*.pck
+
+# Local-only screenshots, captures and logs. Never commit artifacts.
+artifacts/
+*.log
