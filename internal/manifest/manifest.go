@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/decred/dcrd/crypto/blake256"
+	"github.com/karamble/dcrgaming-orbitgolf/pkg/sim"
 )
 
 const Version uint16 = 1
@@ -24,7 +25,7 @@ func (m Manifest) Validate() error {
 	if _, err := hex.DecodeString(m.CourseHash); err != nil {
 		return fmt.Errorf("invalid course hash")
 	}
-	if m.Version != Version || m.GameVersion != 1 || m.SimulationVersion != 1 || len(m.CourseHash) != 64 || m.Holes != 9 || m.StrokeCap != 12 || m.MoveDeadlineBlocks == 0 || m.MatchDeadlineBlocks <= m.MoveDeadlineBlocks || m.OpenerRule != OpenerAlternating || m.PayoutRule != PayoutWinnerTakesPot {
+	if m.Version != Version || m.GameVersion != 1 || m.SimulationVersion != sim.Version || len(m.CourseHash) != 64 || m.Holes != 9 || m.StrokeCap != 12 || m.MoveDeadlineBlocks == 0 || m.MatchDeadlineBlocks <= m.MoveDeadlineBlocks || m.OpenerRule != OpenerAlternating || m.PayoutRule != PayoutWinnerTakesPot {
 		return fmt.Errorf("unsupported ORBIT GOLF rules")
 	}
 	return nil

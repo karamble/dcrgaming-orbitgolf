@@ -68,8 +68,12 @@ func TestRailBounceAndVoidPenalty(t *testing.T) {
 }
 
 func TestRampCanReachLanding(t *testing.T) {
-	for _, idx := range []int{2, 6} {
-		h := course.All()[idx]
+	for _, gravity := range []int64{7, 3} {
+		h := course.Hole{Name: "launch fixture", Gravity: gravity, Tee: course.V(0, 0, 10), Cup: course.V(0, 0, -10), Platforms: []course.Platform{
+			{Z: 8 * course.Unit, W: 12 * course.Unit, D: 10 * course.Unit},
+			{Z: course.Unit, W: 5 * course.Unit, D: 4 * course.Unit, Y: 2 * course.Unit, Rise: -2 * course.Unit},
+			{Z: -9 * course.Unit, W: 12 * course.Unit, D: 8 * course.Unit},
+		}}
 		landed := false
 		for p := uint32(300); p <= 1000; p += 10 {
 			r, err := Simulate(h, Tee(h), Shot(3072, p))
@@ -108,7 +112,8 @@ func TestAllCoursesDeterministicAndBounded(t *testing.T) {
 	}
 	encoded, _ := json.Marshal(corpus)
 	hash := fmt.Sprintf("%x", sha256.Sum256(encoded))
-	const golden = "ebc3307a579c2774876979ccb6097e3bac55a18ece582cc0d99835976b3dc5c0"
+	// Simulation v2: expedition courses, continuous slopes, signed gate timing.
+	const golden = "4b512032fef356fe013248a53b48a06ab545cf09df9a54954b9251b7a598b1cb"
 	if hash != golden {
 		t.Fatal("simulation changed: review and version rules before updating corpus hash", hash)
 	}

@@ -43,7 +43,7 @@ func TestTurnsValidationAndReplay(t *testing.T) {
 // Place a ball just before the cup to exercise scoring independently of aiming.
 func nearCup(m *Match, s uint32, strokes int) {
 	h := course.All()[m.index]
-	m.state.Balls[s] = sim.Ball{Pos: course.Vec{X: h.Cup.X - 1000, Y: sim.Radius, Z: h.Cup.Z}, Strokes: strokes}
+	m.state.Balls[s] = sim.Ball{Pos: course.Vec{X: h.Cup.X - 1000, Y: h.Cup.Y + sim.Radius, Z: h.Cup.Z}, Strokes: strokes}
 }
 
 func TestEarlyClinchAndAlternatingOpeners(t *testing.T) {

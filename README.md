@@ -40,7 +40,11 @@ not connect to a bridge and need no credentials or wallet.
   next idle guide to 35%, never the previous shot's power. The preview power is shown
   beside the bar. Updates are throttled and can lag slightly while aim/power
   changes; they never sign a move or advance the match.
-- Right-drag orbits, wheel zooms, C resets the camera.
+- The camera follows the active ball, including its elevation and shot replay.
+  Right-drag or hold Q/E to orbit; wheel zooms. C recentres on the ball, not the
+  course origin. V toggles a whole-course overview for planning long approaches.
+  Tunnel roofs become transparent near the ball. Reduced motion removes camera
+  smoothing, but does not hide the ball or freeze gameplay obstacles.
 - R replays the last shot on the current hole; Escape returns to the lobby.
 
 ## Rules
@@ -51,8 +55,28 @@ Shattered Moon: Low Orbit, Broken Causeway, Event Horizon.
 
 Players putt independent balls which never collide. The first player alternates
 by hole. Players alternate shots unless one has already finished the hole.
-Ramps launch balls; there is no separate chip or timing control. Falling into
+Ramps launch balls; there is no separate chip control. Falling into
 the void adds one penalty and returns the ball to its pre-shot position.
+
+The expedition layouts run 128–164 metres from tee to cup, with par 5–7,
+raised decks, uphill/downhill approaches, narrow causeways, covered tunnels and
+selected jump gaps. Full power rolls roughly 31 metres on level turf. Ramps
+have no static friction: insufficient uphill power rolls back down, including
+in low gravity. Frozen regression routes finish all nine holes in 4–6 putts
+without penalties; these are safe routes, not proven optimal scores.
+
+Cargo Run and Event Horizon have moving airlocks; the reactor courses use
+cycling laser barriers. Red blocks/bounces the ball, green opens the passage.
+The HUD shows the cycle, and the fading guide predicts the crossing at the
+current launch phase. Wait and release your charged putt at the right moment.
+Preview requests are quantized to 100 ms and can lag while charging/aiming.
+
+Timing is deterministic, not a network latency contest: each signed shot packs
+a chosen phase in a six-second cycle alongside angle and power. The Go engine
+advances obstacles at 120 Hz from that phase; peers replay the same result.
+The client clock only selects the phase, never determines collisions. This is
+simulation version 2 with a new course hash. Both peers must use matching rules;
+finish any existing v1 match using the old build rather than replaying it here.
 
 Lower strokes wins a hole; ties give neither player a point. A seat that has not
 holed out at the 12-stroke cap scores 13 for that hole. An unbeatable lead ends

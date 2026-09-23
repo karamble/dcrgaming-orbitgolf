@@ -181,6 +181,49 @@ func check_controls() -> void:
 	game.cancel_charge()
 	game.set_process(true)
 
+func check_camera_and_obstacles() -> void:
+	game.set_process(false)
+	var state_before := JSON.stringify(game.state)
+	var original: Vector3=game.balls[0].position
+	game.balls[0].position=Vector3(2,4,-95)
+	game.reset_camera()
+	check(game.focus.distance_to(game.camera_target())<0.01,"Camera reset did not find the ball on a long course")
+	game.balls[0].position+=Vector3(0,2,-8)
+	game.update_camera_focus(1.0)
+	check(game.focus.distance_to(game.camera_target())<0.05,"Camera failed to follow elevation and progress")
+	game.toggle_overview()
+	check(game.overview and game.focus==game.overview_center and game.overview_distance>100,"Overview failed to frame long course")
+	game.toggle_overview()
+	var previous_yaw: float=game.camera_yaw
+	var motion := InputEventMouseMotion.new()
+	motion.button_mask=MOUSE_BUTTON_MASK_RIGHT
+	motion.relative=Vector2(40,0)
+	game._unhandled_input(motion)
+	check(game.camera_yaw!=previous_yaw,"Manual camera orbit unavailable")
+	var previous_reduced: bool=game.reduced_motion
+	game.reduced_motion=true
+	game.balls[0].position+=Vector3(0,0,-4)
+	game.update_camera_focus(0.1)
+	check(game.focus==game.camera_target(),"Reduced-motion camera lost the ball")
+	game.reduced_motion=previous_reduced
+	game.balls[0].position=original
+	game.reset_camera()
+	for roof in game.world.roofs:
+		game.world.reveal_tunnels(game.world.coord(roof.wall),false)
+		check(roof.material.albedo_color.a<0.2,"Tunnel roof obscures ball")
+	for item in game.world.gates:
+		var g: Dictionary=item.data
+		var open_tick := posmod(24-int(g.Offset),int(g.Period))
+		game.world.update_obstacles(open_tick)
+		if g.Laser: check(not item.node.visible,"Laser failed to open")
+		else: check(is_equal_approx(item.node.position.y,item.base.y+item.height*1.5+1.0),"Door lift disagrees with integer physics")
+		game.world.update_obstacles(open_tick+int(g.Open))
+		if g.Laser: check(item.node.visible,"Laser failed to close")
+		else: check(is_equal_approx(item.node.position.y,item.base.y+item.height/2.0),"Door failed to close")
+	check(JSON.stringify(game.state)==state_before,"Camera/obstacle display mutated match state")
+	game.world.update_obstacles(game.phase_tick())
+	game.set_process(true)
+
 func run() -> void:
 	game=load("res://main.tscn").instantiate()
 	root.add_child(game)
@@ -202,6 +245,7 @@ func run() -> void:
 		check_rail_geometry(game.state.course)
 		check(game.world.animated.size()<80,"Animated nodes accumulated between courses")
 		check_space_motion()
+		check_camera_and_obstacles()
 		if hole==0:
 			await check_preview()
 			await check_controls()

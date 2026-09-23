@@ -9,7 +9,7 @@ import (
 	"github.com/karamble/dcrgaming-orbitgolf/pkg/fixed"
 )
 
-const Version = 1
+const Version = 2
 const Radius int64 = 1800
 const MaxTicks = 3600
 const Hz = 120
@@ -25,12 +25,18 @@ type Result struct {
 	Penalty bool
 	Ticks   int
 	Bounces int
+	Phase   uint32
 }
 
 // Shot packs a 12-bit yaw (0 is +X, 1024 is +Z) and 10-bit power (1..1000).
 func Shot(yaw, power uint32) uint32 { return yaw<<10 | power }
+
+// Phase is a bounded, signed player choice. Quantizing to 100 ms keeps the
+// live preview and released shot identical throughout a displayed timing step.
+func ShotAt(yaw, power, phase uint32) uint32 { return phase<<22 | Shot(yaw, power) }
+func Phase(shot uint32) uint32               { return shot >> 22 }
 func Validate(shot uint32) error {
-	if shot>>10 >= 4096 || shot&1023 < 1 || shot&1023 > 1000 {
+	if Phase(shot) >= course.Cycle || Phase(shot)%course.PhaseStep != 0 || shot&1023 < 1 || shot&1023 > 1000 {
 		return fmt.Errorf("invalid aim or power")
 	}
 	return nil
@@ -56,6 +62,19 @@ func ground(h course.Hole, x, z int64) int64 {
 	return best
 }
 
+// Only the deck actually supporting the ball contributes slope acceleration.
+func slope(h course.Hole, p course.Vec) (int64, int64) {
+	for _, s := range h.Platforms {
+		if abs(p.X-s.X) <= s.W/2 && abs(p.Z-s.Z) <= s.D/2 {
+			y := s.Y + (p.Z-(s.Z-s.D/2))*s.Rise/s.D
+			if abs(p.Y-y-Radius) < 10 && s.Rise != 0 {
+				return s.Rise, s.D
+			}
+		}
+	}
+	return 0, 1
+}
+
 func Simulate(h course.Hole, ball Ball, shot uint32) (Result, error) {
 	if err := Validate(shot); err != nil {
 		return Result{}, err
@@ -65,24 +84,48 @@ func Simulate(h course.Hole, ball Ball, shot uint32) (Result, error) {
 	}
 	p := ball.Pos
 	start := p
-	angle := fixed.Angle((shot >> 10) * 16)
-	speed := int64(shot&1023)*2 + 80
+	angle := fixed.Angle(((shot >> 10) & 4095) * 16)
+	// Full power rolls about 31 m on level turf. The prototype's 54 m
+	// drives could skip entire stages, especially after a downhill launch.
+	speed := int64(shot&1023)*3/2 + 80
 	v := course.Vec{X: int64(fixed.Cos(angle)) * speed / 65536, Z: int64(fixed.Sin(angle)) * speed / 65536}
-	r := Result{Ball: ball, Path: []course.Vec{p}}
+	r := Result{Ball: ball, Path: []course.Vec{p}, Phase: Phase(shot)}
 	r.Ball.Strokes++
 	rest := 0
 	grounded := true
+	slopeRemainder := int64(0)
+	// Bounds follow the actual course, not the old 26 m prototype board.
+	minX, maxX, minZ, maxZ, minY := h.Tee.X, h.Tee.X, h.Tee.Z, h.Tee.Z, h.Tee.Y
+	for _, s := range h.Platforms {
+		minX = min(minX, s.X-s.W/2)
+		maxX = max(maxX, s.X+s.W/2)
+		minZ = min(minZ, s.Z-s.D/2)
+		maxZ = max(maxZ, s.Z+s.D/2)
+		minY = min(minY, min(s.Y, s.Y+s.Rise))
+	}
+	walls := append([]course.Wall(nil), h.Walls...)
 	for tick := 0; tick < MaxTicks; tick++ {
 		r.Ticks = tick + 1
-		if grounded {
-			for _, s := range h.Platforms {
-				if abs(p.X-s.X) <= s.W/2 && abs(p.Z-s.Z) <= s.D/2 && s.Rise != 0 {
-					v.Z -= h.Gravity * s.Rise / s.D
-				}
+		walls = walls[:len(h.Walls)]
+		for _, g := range h.Gates {
+			if w, active := course.GateWall(g, int(r.Phase)+tick); active {
+				walls = append(walls, w)
 			}
+		}
+		if grounded {
+			rise, depth := slope(h, p)
+			// Fractional acceleration survives integer rounding even on a gentle
+			// low-gravity slope. Ramps have no static friction: a stalled climb
+			// reverses into a downhill roll rather than ending the shot.
+			slopeRemainder += h.Gravity * rise * depth * 1024 / (depth*depth + rise*rise)
+			v.Z -= slopeRemainder / 1024
+			slopeRemainder %= 1024
 			n := length(v.X, v.Z)
 			if n > 0 {
 				friction := int64(4)
+				if rise != 0 {
+					friction = 0
+				}
 				if n <= friction {
 					v.X = 0
 					v.Z = 0
@@ -112,12 +155,18 @@ func Simulate(h course.Hole, ball Ball, shot uint32) (Result, error) {
 			p.X += v.X / steps
 			p.Z += v.Z / steps
 			p.Y += v.Y / steps
-			for _, w := range h.Walls {
+			for _, w := range walls {
 				if p.Y-Radius >= w.Y+w.H || p.Y+Radius <= w.Y {
 					continue
 				}
 				if abs(p.X-w.X) < w.W/2+Radius && abs(p.Z-w.Z) < w.D/2+Radius {
-					if abs(old.X-w.X) >= w.W/2+Radius {
+					if w.Ceiling && old.Y+Radius <= w.Y && v.Y > 0 {
+						p.Y = w.Y - Radius
+						v.Y = -v.Y / 2
+					} else if w.Ceiling && old.Y-Radius >= w.Y+w.H && v.Y < 0 {
+						p.Y = w.Y + w.H + Radius
+						v.Y = -v.Y / 2
+					} else if abs(old.X-w.X) >= w.W/2+Radius {
 						p.X = old.X
 						v.X = -v.X * 82 / 100
 					} else {
@@ -128,7 +177,7 @@ func Simulate(h course.Hole, ball Ball, shot uint32) (Result, error) {
 				}
 			}
 			for _, b := range h.Bumpers {
-				if p.Y > course.Unit+Radius {
+				if p.Y-Radius > b.Y+course.Unit || p.Y+Radius < b.Y {
 					continue
 				}
 				dx, dz := p.X-b.X, p.Z-b.Z
@@ -160,7 +209,7 @@ func Simulate(h course.Hole, ball Ball, shot uint32) (Result, error) {
 		if tick%2 == 0 {
 			r.Path = append(r.Path, p)
 		}
-		if p.Y < -5*course.Unit || abs(p.X) > 40*course.Unit || abs(p.Z) > 50*course.Unit {
+		if p.Y < minY-5*course.Unit || p.X < minX-8*course.Unit || p.X > maxX+8*course.Unit || p.Z < minZ-8*course.Unit || p.Z > maxZ+8*course.Unit {
 			r.Penalty = true
 			break
 		}
@@ -170,7 +219,8 @@ func Simulate(h course.Hole, ball Ball, shot uint32) (Result, error) {
 			p = course.Vec{X: h.Cup.X, Y: cupY - 1200, Z: h.Cup.Z}
 			break
 		}
-		if grounded && length(v.X, v.Z) < 10 && abs(v.Y) < 10 {
+		rise, _ := slope(h, p)
+		if grounded && rise == 0 && length(v.X, v.Z) < 10 && abs(v.Y) < 10 {
 			rest++
 		} else {
 			rest = 0

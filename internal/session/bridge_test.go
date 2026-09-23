@@ -353,7 +353,8 @@ func TestAWholeMatchIsPlayedAndSettledOverABridge(t *testing.T) {
 		if moves >= 216 {
 			t.Fatal("match exceeded stroke cap")
 		}
-		if err := bySeat[view.Turn].game.Play(ctx, tableSID, sim.Shot(0, 1)); err != nil {
+		// Exercise signed launch phases across peers and journal replay too.
+		if err := bySeat[view.Turn].game.Play(ctx, tableSID, sim.ShotAt(0, 1, uint32(moves%60)*12)); err != nil {
 			t.Fatal(err)
 		}
 		moves++

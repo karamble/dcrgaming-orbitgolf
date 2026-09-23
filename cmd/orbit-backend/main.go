@@ -23,12 +23,12 @@ import (
 )
 
 type request struct {
-	ID         int    `json:"id"`
-	Method     string `json:"method"`
-	Hole       int    `json:"hole"`
-	Yaw, Power uint32
-	Table      string
-	Config     *bridgeconn.Config
+	ID                int    `json:"id"`
+	Method            string `json:"method"`
+	Hole              int    `json:"hole"`
+	Yaw, Power, Phase uint32
+	Table             string
+	Config            *bridgeconn.Config
 }
 type app struct {
 	dir         string
@@ -179,7 +179,7 @@ func (a *app) call(q request) (any, error) {
 	case "preview":
 		// Presentation-only: simulate a copy, never advance a match, sign a
 		// message, journal an intent, or call the bridge.
-		if q.Yaw >= 4096 || q.Power < 1 || q.Power > 1000 {
+		if q.Yaw >= 4096 || q.Power < 1 || q.Power > 1000 || q.Phase >= course.Cycle || q.Phase%course.PhaseStep != 0 {
 			return nil, fmt.Errorf("invalid shot")
 		}
 		var hole int
@@ -204,16 +204,16 @@ func (a *app) call(q request) (any, error) {
 		default:
 			return nil, fmt.Errorf("start practice or join a table")
 		}
-		r, err := sim.Simulate(course.All()[hole], ball, sim.Shot(q.Yaw, q.Power))
+		r, err := sim.Simulate(course.All()[hole], ball, sim.ShotAt(q.Yaw, q.Power, q.Phase))
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"preview": r, "yaw": q.Yaw, "power": q.Power}, nil
+		return map[string]any{"preview": r, "yaw": q.Yaw, "power": q.Power, "phase": q.Phase}, nil
 	case "shot":
-		if q.Yaw >= 4096 || q.Power < 1 || q.Power > 1000 {
+		if q.Yaw >= 4096 || q.Power < 1 || q.Power > 1000 || q.Phase >= course.Cycle || q.Phase%course.PhaseStep != 0 {
 			return nil, fmt.Errorf("invalid shot")
 		}
-		shot := sim.Shot(q.Yaw, q.Power)
+		shot := sim.ShotAt(q.Yaw, q.Power, q.Phase)
 		var r sim.Result
 		var err error
 		if a.practice >= 0 {

@@ -19,7 +19,7 @@ func TestPreviewIsReadOnlyAndMatchesShot(t *testing.T) {
 				t.Fatal(err)
 			}
 			before, _ := json.Marshal(a.state())
-			q := request{Method: "preview", Yaw: 3072, Power: 600}
+			q := request{Method: "preview", Yaw: 3072, Power: 600, Phase: uint32(hole * 12)}
 			first, err := a.call(q)
 			if err != nil {
 				t.Fatal(err)
@@ -42,7 +42,7 @@ func TestPreviewIsReadOnlyAndMatchesShot(t *testing.T) {
 			}
 		}
 	}
-	for _, q := range []request{{Method: "preview", Power: 0}, {Method: "preview", Power: 1001}, {Method: "preview", Power: 500, Yaw: 4096}} {
+	for _, q := range []request{{Method: "preview", Power: 0}, {Method: "preview", Power: 1001}, {Method: "preview", Power: 500, Yaw: 4096}, {Method: "preview", Power: 500, Phase: 720}, {Method: "preview", Power: 500, Phase: 13}, {Method: "shot", Power: 500, Phase: 720}, {Method: "shot", Power: 500, Phase: 13}} {
 		if _, err := a.call(q); err == nil {
 			t.Fatal("invalid preview accepted")
 		}

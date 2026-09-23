@@ -38,6 +38,14 @@ var current_hole := ""
 var balls: Array[MeshInstance3D] = []
 var trajectory: Node3D
 var route_label: Label
+var timing_label: Label
+var overview_button: Button
+var aim_clock := 0.0
+var shot_phase := 0
+var overview := false
+var overview_center := Vector3.ZERO
+var overview_distance := 160.0
+var camera_keys: Dictionary = {}
 var preview_pending := -1
 var preview_context := ""
 var preview_clock := 0.0
@@ -68,6 +76,7 @@ var sound: AudioStreamPlayer
 var cover: TextureRect
 var ready_to_play := false
 var capture_menu := false
+var capture_overview := false
 var fund_button: Button
 var bridge_terms: Label
 var fund_confirm: ConfirmationDialog
@@ -119,6 +128,7 @@ func _ready() -> void:
 		if arg.begins_with("--capture="): capture_path=arg.trim_prefix("--capture=")
 		if arg.begins_with("--hole="): capture_hole=int(arg.trim_prefix("--hole="))
 		if arg=="--menu": capture_menu=true
+		if arg=="--overview": capture_overview=true
 		if arg.begins_with("--power="): capture_power=clampi(int(arg.trim_prefix("--power=")),1,1000)
 		if arg.begins_with("--yaw="): capture_yaw=posmod(int(arg.trim_prefix("--yaw=")),4096)
 	backend=Backend.new()
@@ -238,15 +248,17 @@ func build_ui() -> void:
 	power.add_theme_stylebox_override("fill",fill)
 	controls.add_child(power)
 	route_label=label("Aim guide · 35% power",12,Color("91b6bb"),controls)
+	timing_label=label("",12,Color("ffbc62"),controls)
 	fire=button("HOLD SPACE TO CHARGE",func(): pass,controls,true)
 	fire.focus_mode=Control.FOCUS_NONE
 	fire.button_down.connect(func(): begin_charge("mouse"))
 	fire.button_up.connect(func():
 		if charge_source=="mouse": release_charge())
 	button("Replay last shot",replay,controls)
-	button("Reset camera  ·  C",func(): focus=Vector3.ZERO;distance=34;camera_yaw=0.48;camera_pitch=0.83,controls)
+	button("Follow ball  ·  C",reset_camera,controls)
+	overview_button=button("Course overview  ·  V",toggle_overview,controls)
 	button("Back to lobby  ·  ESC",show_lobby,controls)
-	label("Hold arrows / A D: aim · Shift: fine\nHold Space or button, release to putt\nRight-drag: orbit · Wheel: zoom",12,Color("92abc2"),controls)
+	label("Arrows / A D: aim · Shift: fine\nHold Space, release to putt\nRight-drag / Q E: orbit · Wheel: zoom",12,Color("92abc2"),controls)
 	hud.hide()
 	var top := HBoxContainer.new()
 	top.position=Vector2(510,24)
@@ -358,6 +370,7 @@ func show_lobby() -> void:
 	if not path.is_empty() or busy: return
 	cancel_charge()
 	held_aim.clear()
+	camera_keys.clear()
 	playing=false
 	cover.show()
 	lobby.show()
@@ -375,7 +388,7 @@ func on_reply(message: Dictionary) -> void:
 		var result: Dictionary=message.data
 		# A response may arrive while aim/power is changing. Discard a route
 		# for another direction, but allow a small charging update latency.
-		if absi(wrapi(int(result.yaw)-yaw,-2048,2048))>96 or absi(int(result.power)-preview_power())>90: return
+		if absi(wrapi(int(result.yaw)-yaw,-2048,2048))>96 or absi(int(result.power)-preview_power())>90 or int(result.get("phase",0))!=phase_tick(): return
 		trajectory.draw(result.preview,reduced_motion)
 		preview_drawn_context=preview_context
 		preview_drawn_yaw=int(result.yaw)
@@ -411,6 +424,7 @@ func on_reply(message: Dictionary) -> void:
 		path=data.result.Path
 		last_path=path.duplicate(true)
 		path_time=0
+		shot_phase=int(data.result.get("Phase",0))
 		moving_seat=int(state.get("view",{}).get("Turn",0))
 		after_shot=data.state
 		notice.text="Out of bounds · one penalty stroke" if data.result.Penalty else ("IN THE CUP!" if data.result.Ball.Holed else "Shot verified locally")
@@ -438,14 +452,21 @@ func apply_state(data: Dictionary) -> void:
 		for sid in tables: table_select.add_item(sid)
 	if not data.has("course"): return
 	var hole: Dictionary=data.course
-	if current_hole!=hole.ID:
+	var new_hole: bool=current_hole!=hole.ID
+	if new_hole:
 		last_path.clear()
 		current_hole=hole.ID
 		world.build(hole)
 		balls.clear()
 		for color in [MINT,Color("568aff")]:
 			balls.append(world.golf_ball(color))
-		focus=Vector3.ZERO
+		aim_clock=0.0
+		var bounds := AABB(world.coord(hole.Tee),Vector3.ZERO)
+		for p in hole.Platforms:
+			bounds=bounds.expand(Vector3(p.X-p.W/2,p.Y,p.Z-p.D/2)/10000.0)
+			bounds=bounds.expand(Vector3(p.X+p.W/2,p.Y+p.Rise,p.Z+p.D/2)/10000.0)
+		overview_center=bounds.get_center()
+		overview_distance=maxf(60.0,bounds.size.length()*1.35)
 		yaw=3072
 		if capture_power>0 and not capture_path.is_empty():
 			yaw=capture_yaw
@@ -455,6 +476,9 @@ func apply_state(data: Dictionary) -> void:
 		balls[i].position=world.coord(view.Grid.Balls[i].Pos)
 		balls[i].visible=not view.Grid.Balls[i].Holed and (i==view.Turn or data.mode!="practice")
 		balls[i].scale=Vector3.ONE if i==view.Turn else Vector3.ONE*0.8
+	if new_hole:
+		reset_camera()
+		if capture_overview and not capture_path.is_empty(): toggle_overview()
 	headline.text=hole.Name
 	detail.text="%s  /  HOLE %02d  /  PAR %d" % [hole.World,int(view.Hole)+1,hole.Par]
 	score.text="%s  ·  STROKE %d\nHOLES WON   %d : %d" % ["TURQUOISE" if view.Turn==0 else "COBALT",int(view.Grid.Balls[view.Turn].Strokes)+1,view.Score[0],view.Score[1]]
@@ -527,7 +551,7 @@ func shoot() -> void:
 	var shot_power := clampi(int(power.value),1,1000)
 	trajectory.hide()
 	busy=true
-	backend.send("shot",{"Yaw":yaw,"Power":shot_power})
+	backend.send("shot",{"Yaw":yaw,"Power":shot_power,"Phase":phase_tick()})
 	cancel_charge()
 	preview_last_key=""
 	preview_drawn_context=""
@@ -567,6 +591,9 @@ func _process(delta: float) -> void:
 	if not capture_path.is_empty() and capture_power>0 and playing:
 		power.value=capture_power
 	update_controls(delta)
+	if playing and not busy and path.is_empty(): aim_clock=fposmod(aim_clock+delta,6.0)
+	if playing and not settings.visible and not fund_confirm.visible:
+		camera_yaw+=(float(camera_keys.has(KEY_E))-float(camera_keys.has(KEY_Q)))*delta*1.3
 	power_label.text="SHOT POWER · %d%%" % int(round(power.value/10.0))
 	poll_time+=delta
 	if poll_time>2 and backend!=null and state.get("connected",false) and not busy:
@@ -581,7 +608,18 @@ func _process(delta: float) -> void:
 		else:
 			var pos: Vector3=world.coord(path[index]).lerp(world.coord(path[index+1]),path_time-index)
 			balls[moving_seat].position=pos
-			if not reduced_motion: focus=focus.lerp(Vector3(pos.x,0,pos.z)*0.3,delta*2)
+	update_camera_focus(delta)
+	var obstacle_tick := shot_phase+int(path_time*2.0) if not path.is_empty() else phase_tick()
+	world.update_obstacles(obstacle_tick)
+	if playing:
+		world.reveal_tunnels(camera_target(),overview)
+		if not world.gates.is_empty():
+			var g: Dictionary=world.gates[0].data
+			var gate_phase := (obstacle_tick+int(g.Offset))%int(g.Period)
+			var open_now := gate_phase<int(g.Open)
+			var seconds := float((int(g.Open) if open_now else int(g.Period))-gate_phase)/120.0
+			timing_label.text="%s · %s %.1fs" % ["LASER" if g.Laser else "AIRLOCK","OPEN" if open_now else "OPENS IN",seconds]
+		else: timing_label.text=""
 	update_preview(delta)
 	if playing and state.has("view"):
 		fire.disabled=not can_shoot()
@@ -608,22 +646,52 @@ func update_preview(delta: float) -> void:
 	var context := shot_context()
 	if context!=preview_drawn_context or absi(wrapi(yaw-preview_drawn_yaw,-2048,2048))>96: trajectory.hide()
 	var wanted_power := preview_power()
-	var key := context+"/%d/%d" % [yaw,wanted_power]
+	var key := context+"/%d/%d/%d" % [yaw,wanted_power,phase_tick()]
 	if preview_pending>=0 or preview_clock<0.075 or key==preview_last_key: return
 	preview_clock=0.0
 	preview_context=context
 	preview_last_key=key
-	preview_pending=backend.send("preview",{"Yaw":yaw,"Power":wanted_power})
+	preview_pending=backend.send("preview",{"Yaw":yaw,"Power":wanted_power,"Phase":phase_tick()})
+
+func phase_tick() -> int:
+	return (int(aim_clock*10.0)%60)*12 if not world.gates.is_empty() else 0
+
+func camera_target() -> Vector3:
+	if balls.is_empty() or not state.has("view"): return Vector3.ZERO
+	var seat := moving_seat if not path.is_empty() else int(state.view.Turn)
+	return balls[seat].position+Vector3(0,0.7,-3)
+
+func update_camera_focus(delta: float) -> void:
+	if not playing: return
+	var target := overview_center if overview else camera_target()
+	focus=target if reduced_motion else focus.lerp(target,1.0-exp(-7.0*delta))
+
+func reset_camera() -> void:
+	overview=false
+	distance=34.0
+	camera_yaw=0.22
+	camera_pitch=0.83
+	focus=camera_target()
+	if overview_button!=null: overview_button.text="Course overview  ·  V"
+
+func toggle_overview() -> void:
+	if not playing: return
+	overview=not overview
+	focus=overview_center if overview else camera_target()
+	overview_button.text="Follow ball  ·  V" if overview else "Course overview  ·  V"
 
 func update_camera() -> void:
 	if camera==null: return
-	camera.position=focus+Vector3(sin(camera_yaw)*cos(camera_pitch),sin(camera_pitch),cos(camera_yaw)*cos(camera_pitch))*distance
+	var radius := overview_distance if overview else distance
+	camera.position=focus+Vector3(sin(camera_yaw)*cos(camera_pitch),sin(camera_pitch),cos(camera_yaw)*cos(camera_pitch))*radius
 	camera.look_at(focus,Vector3.UP)
+	camera.h_offset=-radius*0.16 if playing else 0.0
 
 func _notification(what: int) -> void:
 	if what==NOTIFICATION_APPLICATION_FOCUS_OUT:
 		cancel_charge()
 		held_aim.clear()
+		camera_keys.clear()
 
 # Gameplay keys are consumed before focused buttons can treat Space/arrow keys
 # as UI navigation. Text entry and modal dialogs retain their normal controls.
@@ -638,7 +706,11 @@ func _input(event: InputEvent) -> void:
 		return
 	if not playing or settings.visible or fund_confirm.visible: return
 	if event is InputEventKey:
-		if event.keycode in [KEY_LEFT,KEY_RIGHT,KEY_UP,KEY_DOWN,KEY_A,KEY_D]:
+		if event.keycode in [KEY_Q,KEY_E]:
+			if event.pressed: camera_keys[event.keycode]=true
+			else: camera_keys.erase(event.keycode)
+			get_viewport().set_input_as_handled()
+		elif event.keycode in [KEY_LEFT,KEY_RIGHT,KEY_UP,KEY_DOWN,KEY_A,KEY_D]:
 			if event.pressed: held_aim[event.keycode]=true
 			else: held_aim.erase(event.keycode)
 			get_viewport().set_input_as_handled()
@@ -653,14 +725,17 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
 			KEY_ESCAPE: show_lobby()
-			KEY_C: focus=Vector3.ZERO;camera_yaw=0.48;camera_pitch=0.83;distance=34
+			KEY_C: reset_camera()
+			KEY_V: toggle_overview()
 			KEY_R: replay()
 	if event is InputEventMouseMotion and event.button_mask&MOUSE_BUTTON_MASK_RIGHT:
 		camera_yaw-=event.relative.x*0.005
 		camera_pitch=clampf(camera_pitch+event.relative.y*0.005,0.25,1.48)
 	if event is InputEventMouseButton and event.pressed:
-		if event.button_index==MOUSE_BUTTON_WHEEL_UP: distance=maxf(16,distance-2)
-		if event.button_index==MOUSE_BUTTON_WHEEL_DOWN: distance=minf(60,distance+2)
+		if event.button_index in [MOUSE_BUTTON_WHEEL_UP,MOUSE_BUTTON_WHEEL_DOWN]:
+			var step := -2.0 if event.button_index==MOUSE_BUTTON_WHEEL_UP else 2.0
+			if overview: overview_distance=clampf(overview_distance+step*4.0,50.0,300.0)
+			else: distance=clampf(distance+step,14.0,70.0)
 		if event.button_index==MOUSE_BUTTON_LEFT and playing and not balls.is_empty():
 			var ball: Vector3=balls[int(state.view.Turn)].position
 			var plane := Plane(Vector3.UP,ball.y)

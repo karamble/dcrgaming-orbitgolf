@@ -14,6 +14,8 @@ const Surface = preload("res://scripts/surface.gdshader")
 const GolfBall = preload("res://scripts/ball.gdshader")
 const Rail = preload("res://scripts/rail.gd")
 var wall_nodes: Array[MeshInstance3D] = []
+var roofs: Array[Dictionary] = []
+var gates: Array[Dictionary] = []
 
 func material(color: Color, glow: float = 0.0) -> Material:
 	var key := str(color)+"/"+str(glow)
@@ -84,6 +86,8 @@ func coord(d: Dictionary) -> Vector3:
 
 func build(hole: Dictionary) -> void:
 	wall_nodes.clear()
+	roofs.clear()
+	gates.clear()
 	animated.clear()
 	comets.clear()
 	space_time=0.0
@@ -128,11 +132,23 @@ func build(hole: Dictionary) -> void:
 			for side in [-1,1]:
 				box(Vector3(x+side*(w/2-0.5),y-1.2,z),Vector3(0.4,1.0,d*0.8),metal)
 	for wall in hole.Walls if hole.Walls != null else []:
+		if wall.get("Ceiling",false):
+			var roof := box(coord(wall)+Vector3(0,float(wall.H)/20000.0,0),Vector3(wall.W,wall.H,wall.D)/10000.0,metal)
+			var coat := StandardMaterial3D.new()
+			coat.albedo_color=metal.lightened(0.25)
+			coat.transparency=BaseMaterial3D.TRANSPARENCY_ALPHA
+			coat.cull_mode=BaseMaterial3D.CULL_DISABLED
+			roof.material_override=coat
+			roofs.append({"node":roof,"material":coat,"wall":wall})
+			wall_nodes.append(roof)
+			for end in [-1,1]:
+				box(coord(wall)+Vector3(0,-0.05,end*float(wall.D)/20000.0),Vector3(float(wall.W)/10000.0,0.10,0.15),accent,1.0)
+			continue
 		var rail := Rail.build(wall,hole)
 		add_child(rail)
 		wall_nodes.append(rail)
 	for b in hole.Bumpers if hole.Bumpers != null else []:
-		var pos := Vector3(b.X,0,b.Z)/10000.0
+		var pos := coord(b)
 		var cylinder := CylinderMesh.new()
 		cylinder.top_radius=b.Radius/10000.0
 		cylinder.bottom_radius=cylinder.top_radius
@@ -144,6 +160,22 @@ func build(hole: Dictionary) -> void:
 		var pos := Vector3(f.X,100,f.Z)/10000.0
 		for radius in [0.4,0.7,1.0]:
 			ring(pos,f.Radius/10000.0*radius,accent.darkened(0.3))
+	for g in hole.Gates if hole.get("Gates")!=null else []:
+		var pos := coord(g)
+		var size := Vector3(g.W,g.H,g.D)/10000.0
+		var door := box(pos+Vector3(0,size.y/2.0,0),size,Color("ff536a") if g.Laser else metal.lightened(0.3),0.5 if g.Laser else 0.0)
+		if g.Laser:
+			var laser := StandardMaterial3D.new()
+			laser.transparency=BaseMaterial3D.TRANSPARENCY_ALPHA
+			laser.albedo_color=Color(1.0,0.08,0.2,0.42)
+			laser.emission_enabled=true
+			laser.emission=Color("ff365c")
+			door.material_override=laser
+		for side in [-1,1]:
+			box(pos+Vector3(side*(size.x/2.0+0.25),2.3,0),Vector3(0.45,4.6,0.8),metal)
+		box(pos+Vector3(0,4.6,0),Vector3(size.x+0.9,0.3,0.8),metal)
+		var signal_lamp := box(pos+Vector3(0,4.8,0.45),Vector3(size.x,0.12,0.12),MINT_COLOR,0.9)
+		gates.append({"data":g,"node":door,"lamp":signal_lamp,"base":pos,"height":size.y})
 	var cup := coord(hole.Cup)
 	var disc := CylinderMesh.new()
 	disc.top_radius=0.34
@@ -162,6 +194,32 @@ func build(hole: Dictionary) -> void:
 	add_child(course_number)
 	ring(coord(hole.Tee)+Vector3(0,0.02,0),0.45,accent)
 	build_decor()
+	update_obstacles(0)
+
+const MINT_COLOR := Color("39f3cd")
+
+# Keep this integer phase/lift calculation identical to course.GateWall.
+# Reduced motion must not freeze gameplay obstacles, only decoration.
+func update_obstacles(tick: int) -> void:
+	for item in gates:
+		var g: Dictionary=item.data
+		var phase := (tick+int(g.Offset))%int(g.Period)
+		var opened := phase<int(g.Open)
+		if g.Laser:
+			item.node.visible=not opened
+		else:
+			var lift := mini(24,mini(phase,int(g.Open)-phase)) if opened else 0
+			var lift_units: int=lift*(int(g.H)+10000)/24
+			item.node.position=item.base+Vector3(0,item.height/2.0+float(lift_units)/10000.0,0)
+		item.lamp.material_override=material(MINT_COLOR if opened else Color("ff536a"),0.9)
+
+func reveal_tunnels(ball: Vector3, overview: bool) -> void:
+	for item in roofs:
+		var w: Dictionary=item.wall
+		var near := absf(ball.x-float(w.X)/10000.0)<float(w.W)/20000.0+5.0 and absf(ball.z-float(w.Z)/10000.0)<float(w.D)/20000.0+8.0
+		var tint: Color=item.material.albedo_color
+		tint.a=0.12 if near or overview else 0.85
+		item.material.albedo_color=tint
 
 func build_decor() -> void:
 	decor = Node3D.new()
