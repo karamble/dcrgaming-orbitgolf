@@ -199,6 +199,7 @@ type table struct {
 	// startConflict why the table stopped if two seats disagree.
 	starts        map[string]manifest.Manifest
 	startSent     bool
+	startNoted    bool // our start reached the bridge before a restart
 	startConflict string
 	// unresolved marks a payment that was dispatched and never answered.
 	unresolved bool
@@ -381,6 +382,9 @@ func (g *Game) open(sid string) error {
 		t.abandoned, t.stalled, t.expired = true, a.Stalled, a.Reason == movelog.ReasonExpired
 	}
 	for _, note := range rep.Notes {
+		if note == "start" {
+			t.startNoted = true
+		}
 		if note == "paid" {
 			// A settled table that came back looking unsettled would
 			// propose its payout all over again.

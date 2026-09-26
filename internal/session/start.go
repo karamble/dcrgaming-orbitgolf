@@ -101,12 +101,25 @@ func (g *Game) announceStart(ctx context.Context, sid string) error {
 	t.starts[hex.EncodeToString(signer)] = ours
 	g.mu.Unlock()
 
+	g.mu.Lock()
+	noted := t.startNoted
+	g.mu.Unlock()
+	if noted {
+		// Sent before a restart; Bison Relay delivers it, so it is not sent again.
+		return nil
+	}
 	log.Infof("table %s: seat %d stating its rules", sid, seat)
-	return rt.Send(ctx, sid, KindStart, startMessage{
+	if err := rt.Send(ctx, sid, KindStart, startMessage{
 		Manifest: ours,
 		Signer:   hex.EncodeToString(signer),
 		Sig:      hex.EncodeToString(sig),
-	}, wire.ClassDurable)
+	}, wire.ClassDurable); err != nil {
+		return err
+	}
+	if err := t.journal.Note("start"); err != nil {
+		log.Errorf("table %s: the sent rules could not be recorded: %v", sid, err)
+	}
+	return nil
 }
 
 // handleStart takes the other seat's statement of which game it is playing.

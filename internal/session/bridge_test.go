@@ -509,4 +509,14 @@ func TestAMatchSurvivesARestartAgainstTheRealRuntime(t *testing.T) {
 		b, _ := peers[1].game.View(tableSID)
 		return a.Moves == b.Moves && a.Head == b.Head
 	})
+	// Bison Relay delivers every accepted frame to peers that were away, so
+	// nothing is ever sent twice, restart included.
+	seen := map[string]bool{}
+	for _, f := range fake.Sent() {
+		k := f.GetFrom() + "\x00" + f.GetFrame()
+		if seen[k] {
+			t.Fatalf("%s sent the same frame again: %.120s", f.GetFrom(), f.GetFrame())
+		}
+		seen[k] = true
+	}
 }
