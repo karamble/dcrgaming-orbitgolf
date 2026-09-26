@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: karamble/dcrgaming-sdk
-          ref: bd72465cbee7cd2491531cb2b9ffee3652b46d6c
+          ref: 07745b262fa41385a16cce29fcfa4752993064bb
           path: dcrgaming-sdk
           persist-credentials: false
 
@@ -66,8 +66,8 @@ jobs:
           go mod tidy
           git diff --exit-code -- go.mod go.sum
           go mod verify
-          test "$(go list -m -f '{{.Version}}' github.com/decred/dcrd/txscript/v4)" = v4.1.1
-          test "$(go list -m -f '{{.Version}}' github.com/decred/dcrd/wire)" = v1.7.0
+          test "$(go list -m -f '{{.Version}}' github.com/decred/dcrd/txscript/v4)" = v4.1.2
+          test "$(go list -m -f '{{.Version}}' github.com/decred/dcrd/wire)" = v1.7.2
 
       - name: Install checksum-pinned Godot 4.6.3
         env:
