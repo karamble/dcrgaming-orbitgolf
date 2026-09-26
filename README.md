@@ -30,7 +30,9 @@ not connect to a bridge and need no credentials or wallet.
 - Click the course to aim, or hold left/right arrows (A/D) to turn smoothly.
   Up/down arrows also turn the aim; hold Shift for precision aiming.
 - Hold Space to fill the power bar, then release to putt. Full power takes
-  1.8 seconds and stays capped until release. The on-screen button also supports
+  1.8 seconds. The bar stays full for one second, falls over 1.8 seconds, then
+  rises again, repeating while held. Release on either sweep to use the displayed
+  power; reaching full or empty never fires automatically. The on-screen button also supports
   press-and-hold charging. Losing focus or leaving the hole cancels a charge.
 - The UI animates the Go simulation's verified path after release.
 - A textured, fading route shows the Go simulation's predicted banks, magnetic
@@ -45,7 +47,26 @@ not connect to a bridge and need no credentials or wallet.
   course origin. V toggles a whole-course overview for planning long approaches.
   Tunnel roofs become transparent near the ball. Reduced motion removes camera
   smoothing, but does not hide the ball or freeze gameplay obstacles.
-- R replays the last shot on the current hole; Escape returns to the lobby.
+- In practice, a static violet dashed ghost shows the previous verified shot
+  and its resting point. G or the ghost toggle hides/shows it. **Retry hole**
+  restarts from the tee while retaining that comparison; a new practice session,
+  different hole, or match clears it. Hazard traces stop at the fall and have no
+  resting-point marker or fictional return line.
+- Cup captures celebrate when the ball arrives: a brief camera push, gold cup
+  light pulse, and a stroke/par result card. Birdies and eagles have distinct
+  chimes; putts from at least 12 metres add a long-putt note and distance. Sound
+  follows the Sound setting. Reduced motion keeps a static card and cup lights
+  without the camera push or pulse. The next turn/hole follows after 1.8 seconds.
+- R replays the last shot on the current hole, including its cup finish;
+  Escape returns to the lobby.
+
+Tab or **Nine-hole scorecard** opens all nine holes with course names, par,
+each player's strokes, and hole winners. The current hole shows strokes so far
+with an ellipsis; `13*` marks a stroke-cap score. The card shows the match lead
+and totals for completed holes, and opens automatically at the end of a match.
+An early win leaves the remaining holes marked “Not played.” Practice shows
+only the selected attempt. Tab, Escape, or Close returns to play; opening the
+card cancels any held charge. Live matches continue while the card is open.
 
 ## Rules
 
@@ -168,7 +189,7 @@ Godot 4.6.3 download is checked against its official release SHA-512 checksum.
   a prototype art pass, not the fidelity shown by the illustrated title art.
 - Two actual dcrpulse instances on simnet: invitations, confirmation delays,
   disconnects, ambiguous payments, winning and drawn settlement, recovery.
-- Richer admission/recovery UI, full scorecards, opponent-shot animation and
+- Richer admission/recovery UI, opponent-shot animation and
   spectator polish. Current remote state updates are polled snapshots.
 - Cross-platform simulation corpus checks, packaged exports, performance
   profiling and independent review before considering real-value play.

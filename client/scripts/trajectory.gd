@@ -21,7 +21,11 @@ func _ready() -> void:
 		marker.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(marker)
 
-func draw(result: Dictionary, reduced_motion: bool) -> void:
+func draw(result: Dictionary, reduced_motion: bool, ghost := false) -> void:
+	ribbon.mesh=null
+	origin.hide()
+	target.hide()
+	distance_metres=0.0
 	var points: Array[Vector3]=[]
 	var raw: Array=result.Path
 	# The authoritative penalty path ends with a teleport back to the tee.
@@ -33,14 +37,22 @@ func draw(result: Dictionary, reduced_motion: bool) -> void:
 			points.append(p+Vector3(0,0.025,0))
 	if points.size()<2: return
 	var tint := Color("ff9675") if result.Penalty else (Color("ffda83") if result.Ball.Holed else Color("55f5d2"))
+	if ghost: tint=Color("ba99ff")
+	material.set_shader_parameter("ghost",ghost)
 	material.set_shader_parameter("route_color",tint)
-	material.set_shader_parameter("motion",0.0 if reduced_motion else 1.0)
+	material.set_shader_parameter("motion",0.0 if reduced_motion or ghost else 1.0)
 	var marker_material := StandardMaterial3D.new()
 	marker_material.shading_mode=BaseMaterial3D.SHADING_MODE_UNSHADED
 	marker_material.albedo_color=tint
+	if ghost:
+		marker_material.transparency=BaseMaterial3D.TRANSPARENCY_ALPHA
+		marker_material.albedo_color.a=0.6
 	for marker in [origin,target]: marker.material_override=marker_material
+	origin.show()
 	origin.position=points[0]-Vector3(0,0.13,0)
 	target.position=points[-1]
+	# A penalty has no resting point here: its final sample is a reset teleport.
+	target.visible=not result.Penalty
 	target.scale=Vector3.ONE*(0.75 if result.Ball.Holed else 1.0)
 	var lengths: Array[float]=[0.0]
 	for i in range(1,points.size()): lengths.append(lengths[-1]+points[i-1].distance_to(points[i]))

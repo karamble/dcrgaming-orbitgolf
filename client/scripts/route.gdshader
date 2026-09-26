@@ -1,6 +1,7 @@
 shader_type spatial;
 render_mode unshaded, cull_disabled, depth_draw_never;
 uniform vec4 route_color : source_color = vec4(0.15,1.0,0.78,1.0);
+uniform bool ghost = false;
 uniform float motion = 1.0;
 uniform float route_length = 1.0;
 void fragment() {
@@ -14,4 +15,8 @@ void fragment() {
 	float fade=pow(max(0.0,1.0-UV.y),0.85);
 	ALBEDO=mix(route_color.rgb,vec3(0.90,1.0,0.98),core*0.55);
 	ALPHA=(core*(0.12+0.88*dash)+halo*dash)*fade;
+	if (ghost) {
+		ALBEDO=route_color.rgb;
+		ALPHA=(core+halo*0.3)*dash*0.42;
+	}
 }

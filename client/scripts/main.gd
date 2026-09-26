@@ -3,6 +3,8 @@ extends Node3D
 const Backend = preload("res://scripts/backend.gd")
 const World = preload("res://scripts/world.gd")
 const Trajectory = preload("res://scripts/trajectory.gd")
+const Scorecard = preload("res://scripts/scorecard.gd")
+const CupFinish = preload("res://scripts/cup_finish.gd")
 const MINT := Color("39f3cd")
 const INK := Color("071222")
 var backend: Node
@@ -16,10 +18,13 @@ var settings: PanelContainer
 var headline: Label
 var detail: Label
 var score: Label
+var scorecard: Control
 var notice: Label
 var power: ProgressBar
 var power_label: Label
 const CHARGE_SECONDS := 1.8
+const FULL_POWER_PAUSE := 1.0
+const CHARGE_CYCLE := CHARGE_SECONDS*2.0+FULL_POWER_PAUSE
 const AIM_SPEED := 1024.0 # 90 degrees per second; Shift reduces this sixfold.
 var held_aim: Dictionary = {}
 var aim_fraction := 0.0
@@ -36,6 +41,18 @@ var courses: Array = []
 var state: Dictionary = {}
 var current_hole := ""
 var balls: Array[MeshInstance3D] = []
+var ghost: Node3D
+var ghost_enabled := true
+var ghost_result: Dictionary = {}
+var ghost_toggle: CheckButton
+var retry_button: Button
+var finish: Node3D
+var finish_banner: PanelContainer
+var finish_title: Label
+var finish_detail: Label
+var shot_result: Dictionary = {}
+var replaying := false
+var last_result: Dictionary = {}
 var trajectory: Node3D
 var route_label: Label
 var timing_label: Label
@@ -112,6 +129,11 @@ func _ready() -> void:
 	trajectory=Trajectory.new()
 	add_child(trajectory)
 	trajectory.hide()
+	ghost=Trajectory.new()
+	add_child(ghost)
+	ghost.hide()
+	finish=CupFinish.new()
+	add_child(finish)
 	camera=Camera3D.new()
 	camera.fov=48
 	camera.far=400
@@ -120,6 +142,7 @@ func _ready() -> void:
 	if prefs.load("user://preferences.cfg")==OK:
 		reduced_motion=prefs.get_value("ui","reduced_motion",false)
 		sound_enabled=prefs.get_value("ui","sound",true)
+		ghost_enabled=prefs.get_value("ui","practice_ghost",true)
 	world.motion_enabled=not reduced_motion
 	build_ui()
 	sound=AudioStreamPlayer.new()
@@ -231,6 +254,7 @@ func build_ui() -> void:
 	headline=label("SHIPYARD",22,Color("eaf4ff"),controls)
 	detail=label("",13,MINT,controls)
 	score=label("",16,Color("eaf4ff"),controls)
+	button("Nine-hole scorecard · Tab",toggle_scorecard,controls)
 	power_label=label("SHOT POWER · 0%",11,Color("91a9c0"),controls)
 	power=ProgressBar.new()
 	power.min_value=0
@@ -254,9 +278,23 @@ func build_ui() -> void:
 	fire.button_down.connect(func(): begin_charge("mouse"))
 	fire.button_up.connect(func():
 		if charge_source=="mouse": release_charge())
-	button("Replay last shot",replay,controls)
-	button("Follow ball  ·  C",reset_camera,controls)
-	overview_button=button("Course overview  ·  V",toggle_overview,controls)
+	var replay_row := HBoxContainer.new()
+	controls.add_child(replay_row)
+	button("Replay shot · R",replay,replay_row).size_flags_horizontal=Control.SIZE_EXPAND_FILL
+	retry_button=button("Retry hole",retry_practice,replay_row)
+	ghost_toggle=CheckButton.new()
+	ghost_toggle.text="Previous shot ghost · G"
+	ghost_toggle.add_theme_font_size_override("font_size",13)
+	ghost_toggle.add_theme_color_override("font_color",Color("ba99ff"))
+	ghost_toggle.button_pressed=ghost_enabled
+	ghost_toggle.tooltip_text="Static violet route and resting point from your last practice shot. Retry hole keeps the ghost."
+	ghost_toggle.toggled.connect(func(v): ghost_enabled=v;save_prefs();update_ghost())
+	controls.add_child(ghost_toggle)
+	var camera_row := HBoxContainer.new()
+	controls.add_child(camera_row)
+	button("Follow · C",reset_camera,camera_row).size_flags_horizontal=Control.SIZE_EXPAND_FILL
+	overview_button=button("Overview · V",toggle_overview,camera_row)
+	overview_button.size_flags_horizontal=Control.SIZE_EXPAND_FILL
 	button("Back to lobby  ·  ESC",show_lobby,controls)
 	label("Arrows / A D: aim · Shift: fine\nHold Space, release to putt\nRight-drag / Q E: orbit · Wheel: zoom",12,Color("92abc2"),controls)
 	hud.hide()
@@ -290,6 +328,14 @@ func build_ui() -> void:
 	notice.position=Vector2(40,820)
 	notice.size=Vector2(1280,60)
 	notice.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
+	finish_banner=panel(Vector2(510,180),Vector2(420,0),ui)
+	finish_banner.mouse_filter=Control.MOUSE_FILTER_IGNORE
+	var celebration := VBoxContainer.new()
+	celebration.mouse_filter=Control.MOUSE_FILTER_IGNORE
+	finish_banner.add_child(celebration)
+	finish_title=label("",32,Color("ffda83"),celebration)
+	finish_detail=label("",16,Color("eaf4ff"),celebration)
+	finish_banner.hide()
 	settings=panel(Vector2(470,100),Vector2(720,0),ui)
 	var form := VBoxContainer.new()
 	form.add_theme_constant_override("separation",8)
@@ -334,7 +380,7 @@ func build_ui() -> void:
 	button("Disconnect",func(): backend.send("disconnect"),row)
 	button("Close",func(): settings.hide(),row)
 	var reduced := CheckButton.new()
-	reduced.text="Reduced motion (camera, space and guide)"
+	reduced.text="Reduced motion (camera, space, guide and finishes)"
 	reduced.button_pressed=reduced_motion
 	reduced.toggled.connect(func(v):
 		reduced_motion=v
@@ -345,14 +391,21 @@ func build_ui() -> void:
 	var audio_toggle := CheckButton.new()
 	audio_toggle.text="Sound"
 	audio_toggle.button_pressed=sound_enabled
-	audio_toggle.toggled.connect(func(v): sound_enabled=v;save_prefs())
+	audio_toggle.toggled.connect(func(v):
+		sound_enabled=v
+		if not v: sound.stop()
+		save_prefs())
 	form.add_child(audio_toggle)
 	settings.hide()
+	scorecard=Scorecard.new()
+	ui.add_child(scorecard)
+	scorecard.close_requested.connect(close_scorecard)
 
 func save_prefs() -> void:
 	var config := ConfigFile.new()
 	config.set_value("ui","reduced_motion",reduced_motion)
 	config.set_value("ui","sound",sound_enabled)
+	config.set_value("ui","practice_ghost",ghost_enabled)
 	config.save("user://preferences.cfg")
 
 func save_config() -> void:
@@ -361,17 +414,63 @@ func save_config() -> void:
 
 func start_practice() -> void:
 	if not ready_to_play: return
+	clear_shot_history()
 	cancel_charge()
 	playing=true
 	busy=true
 	backend.send("practice",{"hole":selector.selected})
+
+func retry_practice() -> void:
+	if state.get("mode","")!="practice" or busy or not path.is_empty() or finish.active: return
+	cancel_charge()
+	last_path.clear()
+	last_result.clear()
+	busy=true
+	backend.send("practice",{"hole":int(state.view.Hole)})
+
+func clear_shot_history() -> void:
+	last_path.clear()
+	last_result.clear()
+	shot_result.clear()
+	ghost_result.clear()
+	ghost.hide()
+
+func update_ghost() -> void:
+	var practice: bool=playing and state.get("mode","")=="practice"
+	ghost_toggle.visible=practice
+	retry_button.visible=practice
+	retry_button.disabled=busy or not path.is_empty() or finish.active
+	ghost.visible=practice and ghost_enabled and not ghost_result.is_empty() and path.is_empty() and not finish.active
+
+func toggle_ghost() -> void:
+	if playing and state.get("mode","")=="practice": ghost_toggle.button_pressed=not ghost_toggle.button_pressed
+
+func toggle_scorecard() -> void:
+	if scorecard.visible:
+		close_scorecard()
+		return
+	if not playing or not state.has("view") or settings.visible or fund_confirm.visible: return
+	cancel_charge()
+	held_aim.clear()
+	camera_keys.clear()
+	scorecard.update_card(courses,state)
+	scorecard.show()
+	scorecard.close_button.grab_focus()
+
+func close_scorecard() -> void:
+	scorecard.hide()
+	scorecard.close_button.release_focus()
 
 func show_lobby() -> void:
 	if not path.is_empty() or busy: return
 	cancel_charge()
 	held_aim.clear()
 	camera_keys.clear()
+	if finish.active: complete_shot()
+	clear_shot_history()
+	close_scorecard()
 	playing=false
+	update_ghost()
 	cover.show()
 	lobby.show()
 	hud.hide()
@@ -421,16 +520,21 @@ func on_reply(message: Dictionary) -> void:
 			selector.select(capture_hole)
 			start_practice()
 	elif data.has("result"):
-		path=data.result.Path
+		shot_result=data.result.duplicate(true)
+		last_result=shot_result.duplicate(true)
+		replaying=false
+		path=data.result.Path.duplicate(true)
 		last_path=path.duplicate(true)
 		path_time=0
 		shot_phase=int(data.result.get("Phase",0))
 		moving_seat=int(state.get("view",{}).get("Turn",0))
 		after_shot=data.state
-		notice.text="Out of bounds · one penalty stroke" if data.result.Penalty else ("IN THE CUP!" if data.result.Ball.Holed else "Shot verified locally")
-		play_sound(740 if data.result.Ball.Holed else 240)
+		notice.text="Shot in progress"
+		play_sound(240)
 	elif data.has("mode"):
-		if path.is_empty(): apply_state(data)
+		if path.is_empty() and not finish.active:
+			apply_state(data)
+			if message.get("method","")=="practice": reset_camera()
 	elif data.has("host"):
 		credential_fields[0].text=data.host
 		credential_fields[1].text=data.port
@@ -438,7 +542,11 @@ func on_reply(message: Dictionary) -> void:
 		notice.text="Credentials saved" if data.configured else "Paste the three credentials issued by dcrpulse."
 
 func apply_state(data: Dictionary) -> void:
+	var was_done: bool=state.get("view",{}).get("Done",false)
+	if state.get("mode","")!=data.get("mode","") or state.get("table","")!=data.get("table",""): clear_shot_history()
 	state=data
+	if not data.has("view"): close_scorecard()
+	update_ghost()
 	if charging and shot_context()!=charge_context: cancel_charge()
 	ui.get_node("BridgeControls").visible=data.get("connected",false)
 	bridge_terms.visible=data.get("connected",false)
@@ -454,7 +562,7 @@ func apply_state(data: Dictionary) -> void:
 	var hole: Dictionary=data.course
 	var new_hole: bool=current_hole!=hole.ID
 	if new_hole:
-		last_path.clear()
+		clear_shot_history()
 		current_hole=hole.ID
 		world.build(hole)
 		balls.clear()
@@ -492,13 +600,15 @@ func apply_state(data: Dictionary) -> void:
 	lobby.visible=not playing
 	hud.visible=playing
 	cover.visible=not playing
+	scorecard.update_card(courses,data)
+	if view.Done and data.mode!="practice" and not was_done and not scorecard.visible: toggle_scorecard()
 
 func dcr(atoms: int) -> String:
 	return "%d.%08d" % [atoms/100000000,atoms%100000000]
 
 func can_shoot() -> bool:
-	if busy or not path.is_empty() or not playing or not state.has("view"): return false
-	if settings.visible or fund_confirm.visible or state.view.Done: return false
+	if busy or not path.is_empty() or finish.active or not playing or not state.has("view"): return false
+	if settings.visible or fund_confirm.visible or scorecard.visible or state.view.Done: return false
 	return state.mode!="bridge" or (state.get("can_play",false) and state.view.Seat==state.view.Turn)
 
 func shot_context() -> String:
@@ -543,8 +653,13 @@ func update_controls(delta: float) -> void:
 	else:
 		aim_fraction=0.0
 	if charging:
-		charge_elapsed=minf(CHARGE_SECONDS,charge_elapsed+delta)
-		power.value=maxf(1.0,round(charge_elapsed/CHARGE_SECONDS*1000.0))
+		charge_elapsed=fposmod(charge_elapsed+delta,CHARGE_CYCLE)
+		var amount := 1.0
+		if charge_elapsed<CHARGE_SECONDS:
+			amount=charge_elapsed/CHARGE_SECONDS
+		elif charge_elapsed>=CHARGE_SECONDS+FULL_POWER_PAUSE:
+			amount=1.0-(charge_elapsed-CHARGE_SECONDS-FULL_POWER_PAUSE)/CHARGE_SECONDS
+		power.value=clampf(round(amount*1000.0),1.0,1000.0)
 
 func shoot() -> void:
 	if not can_shoot(): return
@@ -559,11 +674,46 @@ func shoot() -> void:
 	route_label.text="Shot in progress"
 
 func replay() -> void:
-	if busy or not path.is_empty() or last_path.is_empty(): return
+	if not playing or busy or not path.is_empty() or finish.active or last_path.is_empty(): return
 	cancel_charge()
 	path=last_path.duplicate(true)
+	shot_result=last_result.duplicate(true)
+	replaying=true
+	balls[moving_seat].visible=true
+	balls[moving_seat].position=world.coord(path[0])
 	path_time=0
 	after_shot=state
+
+func arrive() -> void:
+	balls[moving_seat].position=world.coord(shot_result.Ball.Pos)
+	path.clear()
+	if state.mode=="practice" and not replaying:
+		ghost_result=shot_result.duplicate(true)
+		ghost.draw(ghost_result,true,true)
+	if shot_result.Ball.Holed:
+		balls[moving_seat].hide()
+		var summary: Dictionary=CupFinish.describe(shot_result,int(state.course.Par))
+		notice.text=summary.title+" · "+summary.detail.replace("\n"," · ")
+		route_label.text="In the cup"
+		finish_title.text=summary.title
+		finish_detail.text=summary.detail
+		finish_banner.show()
+		finish.begin(world.coord(state.course.Cup),reduced_motion)
+		if sound_enabled:
+			sound.stop()
+			sound.stream=CupFinish.sound_stream(summary)
+			sound.play()
+	else:
+		complete_shot()
+
+func complete_shot() -> void:
+	finish.clear()
+	finish_banner.hide()
+	var penalty: bool=shot_result.get("Penalty",false)
+	apply_state(after_shot)
+	if penalty: notice.text="Out of bounds · one penalty stroke"
+	replaying=false
+	update_ghost()
 
 func play_sound(frequency: float) -> void:
 	if not sound_enabled: return
@@ -592,19 +742,24 @@ func _process(delta: float) -> void:
 		power.value=capture_power
 	update_controls(delta)
 	if playing and not busy and path.is_empty(): aim_clock=fposmod(aim_clock+delta,6.0)
-	if playing and not settings.visible and not fund_confirm.visible:
+	if playing and not settings.visible and not fund_confirm.visible and not scorecard.visible:
 		camera_yaw+=(float(camera_keys.has(KEY_E))-float(camera_keys.has(KEY_Q)))*delta*1.3
-	power_label.text="SHOT POWER · %d%%" % int(round(power.value/10.0))
+	var direction := ""
+	if charging:
+		direction=" · RISING" if charge_elapsed<CHARGE_SECONDS else (" · FULL" if charge_elapsed<CHARGE_SECONDS+FULL_POWER_PAUSE else " · FALLING")
+	power_label.text="SHOT POWER · %d%%%s" % [int(round(power.value/10.0)),direction]
 	poll_time+=delta
 	if poll_time>2 and backend!=null and state.get("connected",false) and not busy:
 		poll_time=0
 		backend.send("poll")
+	if finish.active:
+		finish.advance(delta,reduced_motion)
+		if finish.elapsed>=CupFinish.DURATION: complete_shot()
 	if not path.is_empty() and not balls.is_empty():
 		path_time+=delta*60
 		var index := int(path_time)
 		if index>=path.size()-1:
-			path.clear()
-			apply_state(after_shot)
+			arrive()
 		else:
 			var pos: Vector3=world.coord(path[index]).lerp(world.coord(path[index+1]),path_time-index)
 			balls[moving_seat].position=pos
@@ -620,6 +775,7 @@ func _process(delta: float) -> void:
 			var seconds := float((int(g.Open) if open_now else int(g.Period))-gate_phase)/120.0
 			timing_label.text="%s · %s %.1fs" % ["LASER" if g.Laser else "AIRLOCK","OPEN" if open_now else "OPENS IN",seconds]
 		else: timing_label.text=""
+	update_ghost()
 	update_preview(delta)
 	if playing and state.has("view"):
 		fire.disabled=not can_shoot()
@@ -657,6 +813,7 @@ func phase_tick() -> int:
 	return (int(aim_clock*10.0)%60)*12 if not world.gates.is_empty() else 0
 
 func camera_target() -> Vector3:
+	if finish.active: return finish.position+Vector3(0,0.7,-3)
 	if balls.is_empty() or not state.has("view"): return Vector3.ZERO
 	var seat := moving_seat if not path.is_empty() else int(state.view.Turn)
 	return balls[seat].position+Vector3(0,0.7,-3)
@@ -672,17 +829,18 @@ func reset_camera() -> void:
 	camera_yaw=0.22
 	camera_pitch=0.83
 	focus=camera_target()
-	if overview_button!=null: overview_button.text="Course overview  ·  V"
+	if overview_button!=null: overview_button.text="Overview · V"
 
 func toggle_overview() -> void:
 	if not playing: return
 	overview=not overview
 	focus=overview_center if overview else camera_target()
-	overview_button.text="Follow ball  ·  V" if overview else "Course overview  ·  V"
+	overview_button.text="Follow · V" if overview else "Overview · V"
 
 func update_camera() -> void:
 	if camera==null: return
 	var radius := overview_distance if overview else distance
+	if finish.active and not reduced_motion and not overview: radius*=1.0-0.16*finish.push
 	camera.position=focus+Vector3(sin(camera_yaw)*cos(camera_pitch),sin(camera_pitch),cos(camera_yaw)*cos(camera_pitch))*radius
 	camera.look_at(focus,Vector3.UP)
 	camera.h_offset=-radius*0.16 if playing else 0.0
@@ -696,6 +854,15 @@ func _notification(what: int) -> void:
 # Gameplay keys are consumed before focused buttons can treat Space/arrow keys
 # as UI navigation. Text entry and modal dialogs retain their normal controls.
 func _input(event: InputEvent) -> void:
+	if playing and not settings.visible and not fund_confirm.visible and event is InputEventKey and event.keycode==KEY_TAB:
+		if event.pressed and not event.echo: toggle_scorecard()
+		get_viewport().set_input_as_handled()
+		return
+	if scorecard.visible:
+		if event is InputEventKey and event.keycode==KEY_ESCAPE and event.pressed:
+			close_scorecard()
+			get_viewport().set_input_as_handled()
+		return
 	if settings.visible and event is InputEventKey and event.keycode==KEY_ESCAPE and event.pressed:
 		settings.hide()
 		get_viewport().set_input_as_handled()
@@ -721,13 +888,14 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if settings.visible or fund_confirm.visible: return
+	if settings.visible or fund_confirm.visible or scorecard.visible: return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
 			KEY_ESCAPE: show_lobby()
 			KEY_C: reset_camera()
 			KEY_V: toggle_overview()
 			KEY_R: replay()
+			KEY_G: toggle_ghost()
 	if event is InputEventMouseMotion and event.button_mask&MOUSE_BUTTON_MASK_RIGHT:
 		camera_yaw-=event.relative.x*0.005
 		camera_pitch=clampf(camera_pitch+event.relative.y*0.005,0.25,1.48)
