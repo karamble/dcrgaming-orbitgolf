@@ -52,6 +52,7 @@ func standTwo(t *testing.T) (*bridgetest.Bridge, [2]*peer) {
 	params := chaincfg.TestNet3Params()
 	fake := bridgetest.New(bridgetest.Options{
 		Game: session.GameID, Network: "testnet3", Params: params, Height: 800,
+		Fees: bridgetest.RelayFees(),
 	})
 	srv, err := fake.Serve("seat0", "seat1")
 	if err != nil {
